@@ -48,7 +48,7 @@ pipeline {
                     if (params.ENVIRONMENT == 'DEV') {
                         env.GIT_BRANCH_NAME = 'develop'
                         env.APP_NAME = 'customer-app-dev'
-                        env.DB_NAME_CONTAINER = 'customer-db-dev'
+                        env.DB_CONTAINER = 'customer-db-dev'
                         env.NETWORK_NAME = 'customer-dev-net'
                         env.HOST_PORT = '8081'
                         env.APP_ENV = 'DEV'
@@ -57,7 +57,7 @@ pipeline {
                     } else if (params.ENVIRONMENT == 'UAT') {
                         env.GIT_BRANCH_NAME = 'release'
                         env.APP_NAME = 'customer-app-uat'
-                        env.DB_NAME_CONTAINER = 'customer-db-uat'
+                        env.DB_CONTAINER = 'customer-db-uat'
                         env.NETWORK_NAME = 'customer-uat-net'
                         env.HOST_PORT = '8082'
                         env.APP_ENV = 'UAT'
@@ -71,7 +71,7 @@ pipeline {
 
                         env.GIT_BRANCH_NAME = 'main'
                         env.APP_NAME = 'customer-app-prod'
-                        env.DB_NAME_CONTAINER = 'customer-db-prod'
+                        env.DB_CONTAINER = 'customer-db-prod'
                         env.NETWORK_NAME = 'customer-prod-net'
                         env.HOST_PORT = '8083'
                         env.APP_ENV = 'PRODUCTION'
@@ -81,29 +81,27 @@ pipeline {
                         error('Invalid environment selected')
                     }
 
-                    echo """
-                    ========================================
-                    RESOLVED DEPLOYMENT CONFIGURATION
-                    ========================================
-                    Environment : ${env.APP_ENV}
-                    Git Branch  : ${env.GIT_BRANCH_NAME}
-                    Action      : ${params.ACTION}
-                    Version     : ${params.VERSION}
-                    App         : ${env.APP_NAME}
-                    Database    : ${env.DB_NAME_CONTAINER}
-                    Network     : ${env.NETWORK_NAME}
-                    Host Port   : ${env.HOST_PORT}
-                    DB Volume   : ${env.DB_VOLUME}
-                    Run Tests   : ${params.RUN_TESTS}
-                    ========================================
-                    """
+                    echo "========================================"
+                    echo "RESOLVED DEPLOYMENT CONFIGURATION"
+                    echo "========================================"
+                    echo "Environment : ${env.APP_ENV}"
+                    echo "Git Branch  : ${env.GIT_BRANCH_NAME}"
+                    echo "Action      : ${params.ACTION}"
+                    echo "Version     : ${params.VERSION}"
+                    echo "App         : ${env.APP_NAME}"
+                    echo "Database    : ${env.DB_CONTAINER}"
+                    echo "Network     : ${env.NETWORK_NAME}"
+                    echo "Host Port   : ${env.HOST_PORT}"
+                    echo "DB Volume   : ${env.DB_VOLUME}"
+                    echo "Run Tests   : ${params.RUN_TESTS}"
+                    echo "========================================"
                 }
             }
         }
 
         stage('Checkout Selected Branch') {
             steps {
-                echo "Checking out branch: ${env.GIT_BRANCH_NAME}"
+                echo "Checking out ${env.GIT_BRANCH_NAME}"
 
                 checkout([
                     $class: 'GitSCM',
@@ -118,8 +116,8 @@ pipeline {
         stage('Validate Version') {
             steps {
                 script {
-                    if (!(params.VERSION ==~ /^[0-9]+\\.[0-9]+$/)) {
-                        error("Invalid VERSION '${params.VERSION}'. Use format such as 1.2")
+                    if (!(params.VERSION ==~ /^[0-9]+\.[0-9]+$/)) {
+                        error("Invalid version: ${params.VERSION}")
                     }
 
                     echo "Version ${params.VERSION} is valid."
@@ -135,21 +133,22 @@ pipeline {
             }
 
             steps {
-                powershell """
-                    docker build -t ${env.IMAGE_NAME}:${params.VERSION} .
-                    docker images ${env.IMAGE_NAME}:${params.VERSION}
-                """
+                powershell '''
+                    docker build -t customer-app:$env:VERSION .
+                    docker images customer-app:$env:VERSION
+                '''
             }
         }
 
         stage('Ensure Docker Network') {
             steps {
-                powershell """
-                    docker network inspect ${env.NETWORK_NAME} 2>\\$null
-                    if (\\$LASTEXITCODE -ne 0) {
-                        docker network create ${env.NETWORK_NAME}
+                powershell '''
+                    docker network inspect $env:NETWORK_NAME
+
+                    if ($LASTEXITCODE -ne 0) {
+                        docker network create $env:NETWORK_NAME
                     }
-                """
+                '''
             }
         }
 
@@ -163,25 +162,26 @@ pipeline {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: "${DB_CREDENTIALS_ID}",
+                        credentialsId: 'customer-db-credentials',
                         usernameVariable: 'DB_USER',
                         passwordVariable: 'DB_PASSWORD'
                     )
                 ]) {
-                    powershell """
-                        docker inspect ${env.DB_NAME_CONTAINER} 2>\\$null
 
-                        if (\\$LASTEXITCODE -ne 0) {
+                    powershell '''
+                        docker inspect $env:DB_CONTAINER
+
+                        if ($LASTEXITCODE -ne 0) {
+
                             docker run -d `
-                              --name ${env.DB_NAME_CONTAINER} `
-                              --network ${env.NETWORK_NAME} `
-                              --network-alias ${env.DB_NAME_CONTAINER} `
-                              -e MYSQL_ROOT_PASSWORD=\\$env:DB_PASSWORD `
+                              --name $env:DB_CONTAINER `
+                              --network $env:NETWORK_NAME `
+                              -e MYSQL_ROOT_PASSWORD=$env:DB_PASSWORD `
                               -e MYSQL_DATABASE=customerdb `
-                              -v ${env.DB_VOLUME}:/var/lib/mysql `
+                              -v "$env:DB_VOLUME:/var/lib/mysql" `
                               mysql:8.0
                         }
-                    """
+                    '''
                 }
             }
         }
@@ -196,26 +196,27 @@ pipeline {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: "${DB_CREDENTIALS_ID}",
+                        credentialsId: 'customer-db-credentials',
                         usernameVariable: 'DB_USER',
                         passwordVariable: 'DB_PASSWORD'
                     )
                 ]) {
-                    powershell """
-                        docker rm -f ${env.APP_NAME} 2>\\$null
+
+                    powershell '''
+                        docker rm -f $env:APP_NAME 2>$null
 
                         docker run -d `
-                          --name ${env.APP_NAME} `
-                          --network ${env.NETWORK_NAME} `
-                          -p ${env.HOST_PORT}:8080 `
-                          -e ENVIRONMENT=${env.APP_ENV} `
-                          -e VERSION=${params.VERSION} `
-                          -e DB_HOST=${env.DB_NAME_CONTAINER} `
-                          -e DB_USER=\\$env:DB_USER `
-                          -e DB_PASSWORD=\\$env:DB_PASSWORD `
+                          --name $env:APP_NAME `
+                          --network $env:NETWORK_NAME `
+                          -p $env:HOST_PORT`:8080 `
+                          -e ENVIRONMENT=$env:APP_ENV `
+                          -e VERSION=$env:VERSION `
+                          -e DB_HOST=$env:DB_CONTAINER `
+                          -e DB_USER=$env:DB_USER `
+                          -e DB_PASSWORD=$env:DB_PASSWORD `
                           -e DB_NAME=customerdb `
-                          ${env.IMAGE_NAME}:${params.VERSION}
-                    """
+                          customer-app:$env:VERSION
+                    '''
                 }
             }
         }
@@ -228,44 +229,51 @@ pipeline {
             }
 
             steps {
-                powershell """
-                    Write-Host "Checking application container..."
-                    docker ps --filter "name=${env.APP_NAME}"
-
-                    Write-Host "Checking database container..."
-                    docker ps --filter "name=${env.DB_NAME_CONTAINER}"
+                powershell '''
+                    Write-Host "Checking containers..."
+                    docker ps
 
                     Write-Host "Checking Docker network..."
-                    docker network inspect ${env.NETWORK_NAME}
+                    docker network inspect $env:NETWORK_NAME
+
+                    Write-Host "Waiting for application..."
+                    Start-Sleep -Seconds 10
 
                     Write-Host "Checking application health..."
-                    Start-Sleep -Seconds 5
+                    $health = Invoke-RestMethod "http://localhost:$env:HOST_PORT/health"
 
-                    Invoke-RestMethod `
-                      -Uri "http://localhost:${env.HOST_PORT}/health"
+                    Write-Host "Application health:"
+                    $health
+
+                    if ($health.status -ne "UP") {
+                        throw "Application health check failed"
+                    }
+
+                    if ($health.version -ne $env:VERSION) {
+                        throw "Version mismatch"
+                    }
+
+                    if ($health.environment -ne $env:APP_ENV) {
+                        throw "Environment mismatch"
+                    }
 
                     Write-Host "Checking database connectivity..."
-                    Invoke-RestMethod `
-                      -Uri "http://localhost:${env.HOST_PORT}/db-health"
+                    $dbHealth = Invoke-RestMethod "http://localhost:$env:HOST_PORT/db-health"
+
+                    Write-Host "Database health:"
+                    $dbHealth
+
+                    if ($dbHealth.database -ne "UP") {
+                        throw "Database connectivity check failed"
+                    }
 
                     Write-Host "Checking customer search..."
-                    Invoke-RestMethod `
-                      -Uri "http://localhost:${env.HOST_PORT}/customers/search?name=Chandana"
+                    Invoke-RestMethod "http://localhost:$env:HOST_PORT/customers/search?name=Chandana"
 
-                    Write-Host "Checking deployed version..."
-                    \\$health = Invoke-RestMethod `
-                      -Uri "http://localhost:${env.HOST_PORT}/health"
-
-                    if (\\$health.version -ne "${params.VERSION}") {
-                        throw "Version mismatch. Expected ${params.VERSION}, found \\$($health.version)"
-                    }
-
-                    if (\\$health.environment -ne "${env.APP_ENV}") {
-                        throw "Environment mismatch. Expected ${env.APP_ENV}, found \\$($health.environment)"
-                    }
-
+                    Write-Host "========================================"
                     Write-Host "DEPLOYMENT VALIDATION SUCCESSFUL"
-                """
+                    Write-Host "========================================"
+                '''
             }
         }
 
@@ -278,22 +286,18 @@ pipeline {
 
             steps {
                 echo "Rollback action selected."
-                echo "Rollback implementation will restore the previous production image."
+                echo "Production rollback logic will be added after successful deployment testing."
             }
         }
     }
 
     post {
         success {
-            echo "========================================"
             echo "PIPELINE COMPLETED SUCCESSFULLY"
-            echo "========================================"
         }
 
         failure {
-            echo "========================================"
             echo "PIPELINE FAILED"
-            echo "========================================"
         }
     }
 }
