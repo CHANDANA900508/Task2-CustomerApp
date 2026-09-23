@@ -39,6 +39,7 @@ pipeline {
                         if (params.CONFIRM_PROD != 'YES') {
                             error('Production deployment requires CONFIRM_PROD=YES')
                         }
+
                         env.GIT_BRANCH_NAME = 'main'
                         env.APP_NAME = 'customer-app-prod'
                         env.DB_CONTAINER = 'customer-db-prod'
@@ -144,7 +145,7 @@ pipeline {
                 }
             }
             steps {
-                bat 'timeout /t 10 /nobreak >nul'
+                bat 'ping 127.0.0.1 -n 11 > NUL'
             }
         }
 
@@ -192,11 +193,13 @@ pipeline {
                 '''
 
                 bat '''
-                    timeout /t 5 /nobreak >nul
+                    echo Checking application health
                     curl -f http://localhost:%HOST_PORT%/health
+                    if errorlevel 1 exit /b 1
                 '''
 
                 bat '''
+                    echo Checking environment and version
                     curl -f http://localhost:%HOST_PORT%/health | findstr /C:"UP" /C:"%APP_ENV%" /C:"%VERSION%"
                     if errorlevel 1 exit /b 1
                 '''
@@ -204,9 +207,11 @@ pipeline {
                 bat '''
                     echo Checking database connectivity
                     curl -f http://localhost:%HOST_PORT%/db-health
+                    if errorlevel 1 exit /b 1
                 '''
 
                 bat '''
+                    echo Checking database container
                     curl -f http://localhost:%HOST_PORT%/db-health | findstr /C:"UP" /C:"%DB_CONTAINER%"
                     if errorlevel 1 exit /b 1
                 '''
@@ -214,9 +219,11 @@ pipeline {
                 bat '''
                     echo Checking customer search feature
                     curl -f "http://localhost:%HOST_PORT%/customers/search?name=Chandana"
+                    if errorlevel 1 exit /b 1
                 '''
 
                 bat '''
+                    echo Validating customer search status
                     curl -f "http://localhost:%HOST_PORT%/customers/search?name=Chandana" | findstr /C:"SEARCH_COMPLETED"
                     if errorlevel 1 exit /b 1
                 '''
