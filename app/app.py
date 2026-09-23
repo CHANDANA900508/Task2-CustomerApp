@@ -73,10 +73,11 @@ def search_customer():
         }), 400
 
     return jsonify({
-        "feature": "customer-search",
-        "search_name": name,
-        "message": f"Searching customers for: {name}"
-    })
+    "feature": "customer-search",
+    "search_name": name,
+    "message": f"Searching customers for: {name}",
+    "searched_at": datetime.now().isoformat()
+})
 
 
 if __name__ == "__main__":
