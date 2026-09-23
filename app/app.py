@@ -64,13 +64,21 @@ def db_health():
 
 @app.route("/customers/search")
 def search_customer():
-    name = request.args.get("name", "")
+    name = request.args.get("name", "").strip()
+
+    if not name:
+        return jsonify({
+            "feature": "customer-search",
+            "message": "Please provide a customer name"
+        }), 400
 
     return jsonify({
-        "feature": "customer-search",
-        "search_name": name,
-        "message": f"Searching customers for: {name}"
-    })
+    "feature": "customer-search",
+    "search_name": name,
+    "message": f"Searching customers for: {name}",
+    "searched_at": datetime.now().isoformat(),
+    "status":"SEARCH_COMPLETED"
+})
 
 
 if __name__ == "__main__":
