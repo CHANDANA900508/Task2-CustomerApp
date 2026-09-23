@@ -30,13 +30,14 @@ pipeline {
         choice(
             name: 'CONFIRM_PROD',
             choices: ['NO', 'YES'],
-            description: 'Production deployment confirmation'
+            description: 'Required for production deployment'
         )
     }
 
     environment {
         IMAGE_NAME = 'customer-app'
         DB_CREDENTIALS_ID = 'customer-db-credentials'
+        POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
     }
 
     stages {
@@ -46,6 +47,7 @@ pipeline {
                 script {
 
                     if (params.ENVIRONMENT == 'DEV') {
+
                         env.GIT_BRANCH_NAME = 'develop'
                         env.APP_NAME = 'customer-app-dev'
                         env.DB_CONTAINER = 'customer-db-dev'
@@ -55,6 +57,7 @@ pipeline {
                         env.DB_VOLUME = 'customer-db-dev-data'
 
                     } else if (params.ENVIRONMENT == 'UAT') {
+
                         env.GIT_BRANCH_NAME = 'release'
                         env.APP_NAME = 'customer-app-uat'
                         env.DB_CONTAINER = 'customer-db-uat'
@@ -81,27 +84,28 @@ pipeline {
                         error('Invalid environment selected')
                     }
 
-                    echo "========================================"
-                    echo "RESOLVED DEPLOYMENT CONFIGURATION"
-                    echo "========================================"
+                    echo '========================================'
+                    echo 'RESOLVED DEPLOYMENT CONFIGURATION'
+                    echo '========================================'
                     echo "Environment : ${env.APP_ENV}"
                     echo "Git Branch  : ${env.GIT_BRANCH_NAME}"
                     echo "Action      : ${params.ACTION}"
                     echo "Version     : ${params.VERSION}"
-                    echo "App         : ${env.APP_NAME}"
+                    echo "Application : ${env.APP_NAME}"
                     echo "Database    : ${env.DB_CONTAINER}"
                     echo "Network     : ${env.NETWORK_NAME}"
                     echo "Host Port   : ${env.HOST_PORT}"
                     echo "DB Volume   : ${env.DB_VOLUME}"
                     echo "Run Tests   : ${params.RUN_TESTS}"
-                    echo "========================================"
+                    echo '========================================'
                 }
             }
         }
 
         stage('Checkout Selected Branch') {
             steps {
-                echo "Checking out ${env.GIT_BRANCH_NAME}"
+
+                echo "Checking out branch: ${env.GIT_BRANCH_NAME}"
 
                 checkout([
                     $class: 'GitSCM',
@@ -115,9 +119,11 @@ pipeline {
 
         stage('Validate Version') {
             steps {
+
                 script {
+
                     if (!(params.VERSION ==~ /^[0-9]+\.[0-9]+$/)) {
-                        error("Invalid version: ${params.VERSION}")
+                        error("Invalid VERSION '${params.VERSION}'. Use format such as 1.2")
                     }
 
                     echo "Version ${params.VERSION} is valid."
@@ -133,21 +139,22 @@ pipeline {
             }
 
             steps {
-                powershell '''
-                    docker build -t customer-app:$env:VERSION .
-                    docker images customer-app:$env:VERSION
+
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "docker build -t customer-app:%VERSION% ."
+                '''
+
+                bat '''
+                    docker images customer-app:%VERSION%
                 '''
             }
         }
 
         stage('Ensure Docker Network') {
             steps {
-                powershell '''
-                    docker network inspect $env:NETWORK_NAME
 
-                    if ($LASTEXITCODE -ne 0) {
-                        docker network create $env:NETWORK_NAME
-                    }
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "$network = docker network inspect $env:NETWORK_NAME 2>$null; if ($LASTEXITCODE -ne 0) { docker network create $env:NETWORK_NAME }"
                 '''
             }
         }
@@ -160,6 +167,7 @@ pipeline {
             }
 
             steps {
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'customer-db-credentials',
@@ -168,21 +176,25 @@ pipeline {
                     )
                 ]) {
 
-                    powershell '''
-                        docker inspect $env:DB_CONTAINER
-
-                        if ($LASTEXITCODE -ne 0) {
-
-                            docker run -d `
-                              --name $env:DB_CONTAINER `
-                              --network $env:NETWORK_NAME `
-                              -e MYSQL_ROOT_PASSWORD=$env:DB_PASSWORD `
-                              -e MYSQL_DATABASE=customerdb `
-                              -v "$env:DB_VOLUME:/var/lib/mysql" `
-                              mysql:8.0
-                        }
+                    bat '''
+                        "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "$existing = docker inspect $env:DB_CONTAINER 2>$null; if ($LASTEXITCODE -ne 0) { docker run -d --name $env:DB_CONTAINER --network $env:NETWORK_NAME -e MYSQL_ROOT_PASSWORD=$env:DB_PASSWORD -e MYSQL_DATABASE=customerdb -v $env:DB_VOLUME`:/var/lib/mysql mysql:8.0 }"
                     '''
                 }
+            }
+        }
+
+        stage('Wait for Database') {
+            when {
+                expression {
+                    params.ACTION == 'DEPLOY'
+                }
+            }
+
+            steps {
+
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 10"
+                '''
             }
         }
 
@@ -194,6 +206,7 @@ pipeline {
             }
 
             steps {
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'customer-db-credentials',
@@ -202,20 +215,8 @@ pipeline {
                     )
                 ]) {
 
-                    powershell '''
-                        docker rm -f $env:APP_NAME 2>$null
-
-                        docker run -d `
-                          --name $env:APP_NAME `
-                          --network $env:NETWORK_NAME `
-                          -p $env:HOST_PORT`:8080 `
-                          -e ENVIRONMENT=$env:APP_ENV `
-                          -e VERSION=$env:VERSION `
-                          -e DB_HOST=$env:DB_CONTAINER `
-                          -e DB_USER=$env:DB_USER `
-                          -e DB_PASSWORD=$env:DB_PASSWORD `
-                          -e DB_NAME=customerdb `
-                          customer-app:$env:VERSION
+                    bat '''
+                        "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "docker rm -f $env:APP_NAME 2>$null; docker run -d --name $env:APP_NAME --network $env:NETWORK_NAME -p $env:HOST_PORT`:8080 -e ENVIRONMENT=$env:APP_ENV -e VERSION=$env:VERSION -e DB_HOST=$env:DB_CONTAINER -e DB_USER=$env:DB_USER -e DB_PASSWORD=$env:DB_PASSWORD -e DB_NAME=customerdb customer-app:$env:VERSION"
                     '''
                 }
             }
@@ -229,51 +230,30 @@ pipeline {
             }
 
             steps {
-                powershell '''
-                    Write-Host "Checking containers..."
-                    docker ps
 
-                    Write-Host "Checking Docker network..."
-                    docker network inspect $env:NETWORK_NAME
-
-                    Write-Host "Waiting for application..."
-                    Start-Sleep -Seconds 10
-
-                    Write-Host "Checking application health..."
-                    $health = Invoke-RestMethod "http://localhost:$env:HOST_PORT/health"
-
-                    Write-Host "Application health:"
-                    $health
-
-                    if ($health.status -ne "UP") {
-                        throw "Application health check failed"
-                    }
-
-                    if ($health.version -ne $env:VERSION) {
-                        throw "Version mismatch"
-                    }
-
-                    if ($health.environment -ne $env:APP_ENV) {
-                        throw "Environment mismatch"
-                    }
-
-                    Write-Host "Checking database connectivity..."
-                    $dbHealth = Invoke-RestMethod "http://localhost:$env:HOST_PORT/db-health"
-
-                    Write-Host "Database health:"
-                    $dbHealth
-
-                    if ($dbHealth.database -ne "UP") {
-                        throw "Database connectivity check failed"
-                    }
-
-                    Write-Host "Checking customer search..."
-                    Invoke-RestMethod "http://localhost:$env:HOST_PORT/customers/search?name=Chandana"
-
-                    Write-Host "========================================"
-                    Write-Host "DEPLOYMENT VALIDATION SUCCESSFUL"
-                    Write-Host "========================================"
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'Checking containers...'; docker ps --filter name=$env:APP_NAME; docker ps --filter name=$env:DB_CONTAINER"
                 '''
+
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "Write-Host 'Checking Docker network...'; docker network inspect $env:NETWORK_NAME"
+                '''
+
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 5; $health = Invoke-RestMethod http://localhost:$env:HOST_PORT/health; Write-Host 'Health check:'; $health | ConvertTo-Json; if ($health.status -ne 'UP') { throw 'Application health check failed' }; if ($health.version -ne $env:VERSION) { throw 'Version mismatch' }; if ($health.environment -ne $env:APP_ENV) { throw 'Environment mismatch' }"
+                '''
+
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "$db = Invoke-RestMethod http://localhost:$env:HOST_PORT/db-health; Write-Host 'Database health:'; $db | ConvertTo-Json; if ($db.database -ne 'UP') { throw 'Database connectivity check failed' }"
+                '''
+
+                bat '''
+                    "%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -Command "$search = Invoke-RestMethod 'http://localhost:'$env:HOST_PORT'/customers/search?name=Chandana'; Write-Host 'Customer search response:'; $search | ConvertTo-Json"
+                '''
+
+                echo '========================================'
+                echo 'DEPLOYMENT VALIDATION SUCCESSFUL'
+                echo '========================================'
             }
         }
 
@@ -285,19 +265,25 @@ pipeline {
             }
 
             steps {
-                echo "Rollback action selected."
-                echo "Production rollback logic will be added after successful deployment testing."
+
+                echo 'Rollback action selected.'
+                echo 'Rollback mechanism will be implemented after deployment validation.'
             }
         }
     }
 
     post {
+
         success {
-            echo "PIPELINE COMPLETED SUCCESSFULLY"
+            echo '========================================'
+            echo 'PIPELINE COMPLETED SUCCESSFULLY'
+            echo '========================================'
         }
 
         failure {
-            echo "PIPELINE FAILED"
+            echo '========================================'
+            echo 'PIPELINE FAILED'
+            echo '========================================'
         }
     }
 }
