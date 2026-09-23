@@ -76,7 +76,8 @@ def search_customer():
     "feature": "customer-search",
     "search_name": name,
     "message": f"Searching customers for: {name}",
-    "searched_at": datetime.now().isoformat()
+    "searched_at": datetime.now().isoformat(),
+    "status":"SEARCH_COMPLETED"
 })
 
 
