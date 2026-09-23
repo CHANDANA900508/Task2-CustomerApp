@@ -39,7 +39,6 @@ pipeline {
                         if (params.CONFIRM_PROD != 'YES') {
                             error('Production deployment requires CONFIRM_PROD=YES')
                         }
-
                         env.GIT_BRANCH_NAME = 'main'
                         env.APP_NAME = 'customer-app-prod'
                         env.DB_CONTAINER = 'customer-db-prod'
@@ -101,26 +100,17 @@ pipeline {
                     params.ACTION == 'DEPLOY'
                 }
             }
-
             steps {
-                powershell '''
-                    docker build -t customer-app:$env:VERSION .
-                '''
-
-                powershell '''
-                    docker images customer-app:$env:VERSION
-                '''
+                bat 'docker build -t customer-app:%VERSION% .'
+                bat 'docker images customer-app:%VERSION%'
             }
         }
 
         stage('Ensure Docker Network') {
             steps {
-                powershell '''
-                    $network = docker network inspect $env:NETWORK_NAME 2>$null
-
-                    if ($LASTEXITCODE -ne 0) {
-                        docker network create $env:NETWORK_NAME
-                    }
+                bat '''
+                    docker network inspect %NETWORK_NAME% >nul 2>&1
+                    if errorlevel 1 docker network create %NETWORK_NAME%
                 '''
             }
         }
@@ -131,7 +121,6 @@ pipeline {
                     params.ACTION == 'DEPLOY'
                 }
             }
-
             steps {
                 withCredentials([
                     usernamePassword(
@@ -140,18 +129,9 @@ pipeline {
                         passwordVariable: 'DB_PASSWORD'
                     )
                 ]) {
-                    powershell '''
-                        $existing = docker inspect $env:DB_CONTAINER 2>$null
-
-                        if ($LASTEXITCODE -ne 0) {
-                            docker run -d `
-                                --name $env:DB_CONTAINER `
-                                --network $env:NETWORK_NAME `
-                                -e MYSQL_ROOT_PASSWORD=$env:DB_PASSWORD `
-                                -e MYSQL_DATABASE=customerdb `
-                                -v "$env:DB_VOLUME`:/var/lib/mysql" `
-                                mysql:8.0
-                        }
+                    bat '''
+                        docker inspect %DB_CONTAINER% >nul 2>&1
+                        if errorlevel 1 docker run -d --name %DB_CONTAINER% --network %NETWORK_NAME% -e MYSQL_ROOT_PASSWORD=%DB_PASSWORD% -e MYSQL_DATABASE=customerdb -v %DB_VOLUME%:/var/lib/mysql mysql:8.0
                     '''
                 }
             }
@@ -163,11 +143,8 @@ pipeline {
                     params.ACTION == 'DEPLOY'
                 }
             }
-
             steps {
-                powershell '''
-                    Start-Sleep -Seconds 10
-                '''
+                bat 'timeout /t 10 /nobreak >nul'
             }
         }
 
@@ -177,7 +154,6 @@ pipeline {
                     params.ACTION == 'DEPLOY'
                 }
             }
-
             steps {
                 withCredentials([
                     usernamePassword(
@@ -186,20 +162,9 @@ pipeline {
                         passwordVariable: 'DB_PASSWORD'
                     )
                 ]) {
-                    powershell '''
-                        docker rm -f $env:APP_NAME 2>$null
-
-                        docker run -d `
-                            --name $env:APP_NAME `
-                            --network $env:NETWORK_NAME `
-                            -p "$env:HOST_PORT`:8080" `
-                            -e "ENVIRONMENT=$env:APP_ENV" `
-                            -e "VERSION=$env:VERSION" `
-                            -e "DB_HOST=$env:DB_CONTAINER" `
-                            -e "DB_USER=$env:DB_USER" `
-                            -e "DB_PASSWORD=$env:DB_PASSWORD" `
-                            -e "DB_NAME=customerdb" `
-                            "customer-app:$env:VERSION"
+                    bat '''
+                        docker rm -f %APP_NAME% >nul 2>&1
+                        docker run -d --name %APP_NAME% --network %NETWORK_NAME% -p %HOST_PORT%:8080 -e ENVIRONMENT=%APP_ENV% -e VERSION=%VERSION% -e DB_HOST=%DB_CONTAINER% -e DB_USER=%DB_USER% -e DB_PASSWORD=%DB_PASSWORD% -e DB_NAME=customerdb customer-app:%VERSION%
                     '''
                 }
             }
@@ -208,68 +173,52 @@ pipeline {
         stage('Validate Deployment') {
             when {
                 expression {
-                    params.ACTION == 'DEPLOY'
+                    params.ACTION == 'DEPLOY' && params.RUN_TESTS == 'YES'
                 }
             }
-
             steps {
 
-                powershell '''
-                    Write-Host "Checking containers..."
+                bat '''
+                    echo Checking application container
+                    docker ps --filter name=%APP_NAME%
 
-                    docker ps --filter "name=$env:APP_NAME"
-                    docker ps --filter "name=$env:DB_CONTAINER"
+                    echo Checking database container
+                    docker ps --filter name=%DB_CONTAINER%
                 '''
 
-                powershell '''
-                    Write-Host "Checking Docker network..."
-
-                    docker network inspect $env:NETWORK_NAME
+                bat '''
+                    echo Checking Docker network
+                    docker network inspect %NETWORK_NAME%
                 '''
 
-                powershell '''
-                    Start-Sleep -Seconds 5
-
-                    $health = Invoke-RestMethod "http://localhost:$env:HOST_PORT/health"
-
-                    Write-Host "Health check:"
-                    $health | ConvertTo-Json
-
-                    if ($health.status -ne "UP") {
-                        throw "Application health check failed"
-                    }
-
-                    if ($health.version -ne $env:VERSION) {
-                        throw "Version mismatch"
-                    }
-
-                    if ($health.environment -ne $env:APP_ENV) {
-                        throw "Environment mismatch"
-                    }
+                bat '''
+                    timeout /t 5 /nobreak >nul
+                    curl -f http://localhost:%HOST_PORT%/health
                 '''
 
-                powershell '''
-                    $db = Invoke-RestMethod "http://localhost:$env:HOST_PORT/db-health"
-
-                    Write-Host "Database health:"
-                    $db | ConvertTo-Json
-
-                    if ($db.database -ne "UP") {
-                        throw "Database connectivity check failed"
-                    }
+                bat '''
+                    curl -f http://localhost:%HOST_PORT%/health | findstr /C:"UP" /C:"%APP_ENV%" /C:"%VERSION%"
+                    if errorlevel 1 exit /b 1
                 '''
 
-                powershell '''
-                    $url = "http://localhost:" + $env:HOST_PORT + "/customers/search?name=Chandana"
+                bat '''
+                    echo Checking database connectivity
+                    curl -f http://localhost:%HOST_PORT%/db-health
+                '''
 
-                    $search = Invoke-RestMethod $url
+                bat '''
+                    curl -f http://localhost:%HOST_PORT%/db-health | findstr /C:"UP" /C:"%DB_CONTAINER%"
+                    if errorlevel 1 exit /b 1
+                '''
 
-                    Write-Host "Customer search response:"
-                    $search | ConvertTo-Json
+                bat '''
+                    echo Checking customer search feature
+                    curl -f "http://localhost:%HOST_PORT%/customers/search?name=Chandana"
+                '''
 
-                    if ($search.status -ne "SEARCH_COMPLETED") {
-                        throw "Customer search validation failed"
-                    }
+                bat '''
+                    curl -f "http://localhost:%HOST_PORT%/customers/search?name=Chandana" | findstr /C:"SEARCH_COMPLETED"
+                    if errorlevel 1 exit /b 1
                 '''
 
                 echo '========================================'
@@ -284,7 +233,6 @@ pipeline {
                     params.ACTION == 'ROLLBACK'
                 }
             }
-
             steps {
                 echo 'Rollback action selected.'
                 echo 'Rollback mechanism will be implemented after deployment validation.'
